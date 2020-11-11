@@ -20,6 +20,7 @@ import com.google.android.exoplayer2.upstream.DataSource;
 import com.google.android.exoplayer2.upstream.DefaultDataSourceFactory;
 import com.google.android.exoplayer2.util.Util;
 import com.google.android.exoplayer2.video.VideoListener;
+import com.otaliastudios.zoom.ZoomPdfView;
 import com.otaliastudios.zoom.ZoomImageView;
 import com.otaliastudios.zoom.ZoomLayout;
 import com.otaliastudios.zoom.ZoomLogger;
@@ -44,8 +45,10 @@ public class MainActivity extends AppCompatActivity {
         final Button buttonZoomLayout = findViewById(R.id.show_zl);
         final Button buttonZoomImage = findViewById(R.id.show_ziv);
         final Button buttonZoomSurface = findViewById(R.id.show_zsv);
+        final Button buttonPdfView = findViewById(R.id.show_pdf);
         final ZoomLayout zoomLayout = findViewById(R.id.zoom_layout);
         final ZoomImageView zoomImage = findViewById(R.id.zoom_image);
+        final ZoomPdfView zoomPdfView = findViewById(R.id.pdf);
         final View zoomSurface = findViewById(R.id.zoom_surface);
         zoomImage.setImageDrawable(new ColorGridDrawable());
 
@@ -56,6 +59,7 @@ public class MainActivity extends AppCompatActivity {
                 zoomSurface.setVisibility(View.GONE);
                 zoomImage.setVisibility(View.GONE);
                 zoomLayout.setVisibility(View.VISIBLE);
+                zoomPdfView.setVisibility(View.GONE);
                 buttonZoomImage.setAlpha(0.65f);
                 buttonZoomSurface.setAlpha(0.65f);
                 buttonZoomLayout.setAlpha(1f);
@@ -69,6 +73,7 @@ public class MainActivity extends AppCompatActivity {
                 zoomSurface.setVisibility(View.GONE);
                 zoomLayout.setVisibility(View.GONE);
                 zoomImage.setVisibility(View.VISIBLE);
+                zoomPdfView.setVisibility(View.GONE);
                 buttonZoomLayout.setAlpha(0.65f);
                 buttonZoomSurface.setAlpha(0.65f);
                 buttonZoomImage.setAlpha(1f);
@@ -82,6 +87,7 @@ public class MainActivity extends AppCompatActivity {
                     zoomImage.setVisibility(View.GONE);
                     zoomLayout.setVisibility(View.GONE);
                     zoomSurface.setVisibility(View.VISIBLE);
+                    zoomPdfView.setVisibility(View.GONE);
                     buttonZoomLayout.setAlpha(0.65f);
                     buttonZoomImage.setAlpha(0.65f);
                     buttonZoomSurface.setAlpha(1f);
@@ -91,7 +97,18 @@ public class MainActivity extends AppCompatActivity {
                 }
             }
         });
+        buttonPdfView.setOnClickListener(new View.OnClickListener(){
+            @Override
+            public void onClick(View v) {
+                zoomImage.setVisibility(View.GONE);
+                zoomLayout.setVisibility(View.GONE);
+                zoomSurface.setVisibility(View.GONE);
+                zoomPdfView.setVisibility(View.VISIBLE);
+            }
+        });
+
         buttonZoomLayout.performClick();
+        zoomPdfView.setFile(R.raw.test_pdf);
     }
 
     @Override

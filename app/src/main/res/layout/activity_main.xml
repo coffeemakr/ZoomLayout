@@ -34,6 +34,19 @@
         app:verticalPanEnabled="true"
         app:zoomEnabled="true" />
 
+    <com.otaliastudios.zoom.ZoomPdfView
+        android:id="@+id/pdf"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:scrollbars="horizontal|vertical"
+        android:visibility="gone"
+        app:horizontalPanEnabled="true"
+        app:verticalPanEnabled="true"
+        app:zoomEnabled="true" />
+
+
+
     <FrameLayout
         android:id="@+id/zoom_surface"
         android:visibility="gone"
@@ -86,6 +99,14 @@
             android:layout_weight="0.5"
             android:background="@null"
             android:text="Video" />
+
+        <Button
+            android:id="@+id/show_pdf"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="0.5"
+            android:background="@null"
+            android:text="PDF" />
 
     </LinearLayout>
 

@@ -40,24 +40,31 @@ open class ZoomPdfView private constructor(
     constructor(context: Context, attrs: AttributeSet? = null, @AttrRes defStyleAttr: Int = 0)
             : this(context, attrs, defStyleAttr, ZoomEngine(context))
 
-    private val mMatrix = Matrix()
-    private val identityMatrix = Matrix()
+    private val detailRenderMatrix = Matrix()
     private var baseImage: Bitmap? = null
-    private val renderHandler: Handler
 
-    init {
-        renderHandler = Handler(Looper.getMainLooper()) {
-            when (it.what) {
-                MESSAGE_RENDER -> {
-                    renderPDf()
-                    true
-                }
-                MESSAGE_RENDER_BASE -> {
-                    renderBasePdf()
-                    true
-                }
-                else -> false
+    /**
+     * The base image is rendered using a matrix. This is the inverse of this matrix.
+     */
+    private var inverseBaseMatrix: Matrix = Matrix()
+
+    /**
+     * This property is used to reduce allocations of matrices and contains the value which is
+     * applied with [setImageMatrix]
+     */
+    private val reusedImageMatrix = Matrix()
+
+    private val renderHandler: Handler = Handler(Looper.getMainLooper()) {
+        when (it.what) {
+            MESSAGE_RENDER -> {
+                renderPDf()
+                true
             }
+            MESSAGE_RENDER_BASE -> {
+                renderBasePdf()
+                true
+            }
+            else -> false
         }
     }
 
@@ -106,13 +113,16 @@ open class ZoomPdfView private constructor(
         engine.setContainer(this)
         engine.addListener(object : ZoomEngine.Listener {
             override fun onIdle(engine: ZoomEngine) {
-                renderHandler.removeMessages(MESSAGE_RENDER)
-                renderHandler.sendEmptyMessageDelayed(MESSAGE_RENDER, 1000)
+                if(!renderHandler.hasMessages(MESSAGE_RENDER)) {
+                    renderHandler.sendEmptyMessage(MESSAGE_RENDER)
+                }
             }
             override fun onUpdate(engine: ZoomEngine, matrix: Matrix) {
                 //mMatrix.preScale(pointsToPixel, pointsToPixel)
-                imageMatrix = engine.matrix
-                mMatrix.set(engine.matrix)
+                imageMatrix = reusedImageMatrix.apply {
+                    setConcat(engine.matrix, inverseBaseMatrix)
+                }
+                detailRenderMatrix.set(engine.matrix)
                 setImageBitmap(baseImage)
                 //val page = PdfRenderer(source()).openPage(0)
                 awakenScrollBars()
@@ -136,7 +146,6 @@ open class ZoomPdfView private constructor(
         setMinZoom(minZoom, minZoomMode)
         setMaxZoom(maxZoom, maxZoomMode)
 
-        imageMatrix = mMatrix
         scaleType = ScaleType.MATRIX
     }
 
@@ -150,16 +159,16 @@ open class ZoomPdfView private constructor(
         PdfRenderer(source()).openPage(0).use { page ->
             Log.d(TAG, "width $width, height: $height")
             val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
-            page.render(bitmap, null, mMatrix, RENDER_MODE_FOR_DISPLAY)
+            page.render(bitmap, null, detailRenderMatrix, RENDER_MODE_FOR_DISPLAY)
             setImageBitmap(bitmap)
-            imageMatrix = identityMatrix
+            imageMatrix.reset()
         }
     }
 
 
     private fun renderBasePdf() {
-        val height = height
-        val width = width
+        var height = height
+        var width = width
         if (height <= 0 || width <= 0) {
             return
         }
@@ -169,13 +178,20 @@ open class ZoomPdfView private constructor(
         }
 
         PdfRenderer(source()).openPage(0).use { page ->
+            val size = floatArrayOf(width.toFloat(), height.toFloat())
+            engine.matrix.mapVectors(size)
+            width = size[0].toInt()
+            height = size[1].toInt()
             Log.d(TAG, "Rendering base width $width, height: $height")
-            val bitmap  = Bitmap.createBitmap(page.width, page.height, Bitmap.Config.ARGB_8888)
-            page.render(bitmap, null, null, RENDER_MODE_FOR_DISPLAY)
+            val bitmap  = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+            if(!engine.matrix.invert(inverseBaseMatrix)) {
+                error("Cant invert matrix")
+            }
+            page.render(bitmap, null, engine.matrix, RENDER_MODE_FOR_DISPLAY)
             this.baseImage?.recycle()
             this.baseImage = bitmap
             setImageBitmap(bitmap)
-            imageMatrix = engine.matrix
+            imageMatrix.reset()
         }
     }
 
@@ -221,7 +237,7 @@ open class ZoomPdfView private constructor(
         if (isInSharedElementTransition) {
             // The framework will often change our matrix between onUpdate and onDraw, leaving us with
             // a bad first frame that makes a noticeable flash. Replace the matrix values with our own.
-            imageMatrix = mMatrix
+            imageMatrix = detailRenderMatrix
         }
         super.onDraw(canvas)
     }

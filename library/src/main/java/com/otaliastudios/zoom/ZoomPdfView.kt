@@ -2,9 +2,7 @@ package com.otaliastudios.zoom
 
 import android.annotation.SuppressLint
 import android.content.Context
-import android.graphics.Bitmap
-import android.graphics.Canvas
-import android.graphics.Matrix
+import android.graphics.*
 import android.graphics.pdf.PdfRenderer
 import android.graphics.pdf.PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY
 import android.os.Build
@@ -40,13 +38,54 @@ open class ZoomPdfView private constructor(
     constructor(context: Context, attrs: AttributeSet? = null, @AttrRes defStyleAttr: Int = 0)
             : this(context, attrs, defStyleAttr, ZoomEngine(context))
 
-    private val detailRenderMatrix = Matrix()
-    private var baseImage: Bitmap? = null
+    private var shownImage: RenderedImage? = null
+    private val baseImage = RenderedImage()
+    private val detailImage = RenderedImage()
 
-    /**
-     * The base image is rendered using a matrix. This is the inverse of this matrix.
-     */
-    private var inverseBaseMatrix: Matrix = Matrix()
+    private class RenderedImage {
+        var bitmap: Bitmap? = null
+            set(value) {
+                field = value
+                recalculate()
+            }
+        var matrix = Matrix()
+            set(value) {
+                field.set(value)
+                recalculate()
+            }
+
+        val inverseMatrix: Matrix = Matrix()
+
+        private fun recalculate() {
+            val bitmap = bitmap
+            matrix.invert(inverseMatrix)
+            if (bitmap != null) {
+                viewPort.set(0f, 0f, bitmap.width.toFloat(), bitmap.height.toFloat())
+                inverseMatrix.mapRect(viewPort)
+            } else {
+                viewPort.set(0f, 0f, 0f, 0f)
+            }
+        }
+
+        val viewPort: RectF = RectF(0f, 0f, 0f, 0f)
+
+        fun copyTo(other: RenderedImage) {
+            other.bitmap = bitmap?.let { it.copy(it.config, true) }
+            other.matrix = matrix
+        }
+
+        fun renderWithSize(width: Int, height: Int, block: (Bitmap) -> Unit) {
+            val bitmap = bitmap?.let {
+                if (it.width != width || it.height != height) {
+                    it.reconfigure(width, height, Bitmap.Config.ARGB_8888)
+                }
+                it.eraseColor(Color.TRANSPARENT)
+                it
+            } ?: Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+            block(bitmap)
+            this.bitmap = bitmap
+        }
+    }
 
     /**
      * This property is used to reduce allocations of matrices and contains the value which is
@@ -58,10 +97,6 @@ open class ZoomPdfView private constructor(
         when (it.what) {
             MESSAGE_RENDER -> {
                 renderPDf()
-                true
-            }
-            MESSAGE_RENDER_BASE -> {
-                renderBasePdf()
                 true
             }
             else -> false
@@ -80,7 +115,7 @@ open class ZoomPdfView private constructor(
         val renderer = PdfRenderer(fileDescriptor)
         val page = renderer.openPage(0)
         engine.setContentSize(width = page.width.toFloat(), height = page.height.toFloat())
-        renderHandler.sendEmptyMessage(MESSAGE_RENDER)
+        scheduleRendering()
     }
 
     private val isInSharedElementTransition: Boolean
@@ -113,17 +148,11 @@ open class ZoomPdfView private constructor(
         engine.setContainer(this)
         engine.addListener(object : ZoomEngine.Listener {
             override fun onIdle(engine: ZoomEngine) {
-                if(!renderHandler.hasMessages(MESSAGE_RENDER)) {
-                    renderHandler.sendEmptyMessage(MESSAGE_RENDER)
-                }
+                scheduleRendering()
             }
+
             override fun onUpdate(engine: ZoomEngine, matrix: Matrix) {
-                //mMatrix.preScale(pointsToPixel, pointsToPixel)
-                imageMatrix = reusedImageMatrix.apply {
-                    setConcat(engine.matrix, inverseBaseMatrix)
-                }
-                detailRenderMatrix.set(engine.matrix)
-                setImageBitmap(baseImage)
+                updateImageMatrix()
                 //val page = PdfRenderer(source()).openPage(0)
                 awakenScrollBars()
             }
@@ -145,8 +174,32 @@ open class ZoomPdfView private constructor(
         setAnimationDuration(animationDuration)
         setMinZoom(minZoom, minZoomMode)
         setMaxZoom(maxZoom, maxZoomMode)
-
         scaleType = ScaleType.MATRIX
+    }
+
+    private fun updateImageMatrix() {
+        if(shownImage == null) {
+            shownImage = baseImage
+        }
+
+        val scaledViewPort = RectF(0f, 0f, width.toFloat(), height.toFloat())
+        engine.matrix.invert(reusedImageMatrix)
+        reusedImageMatrix.mapRect(scaledViewPort)
+        val bestImage = if (detailImage.viewPort.contains(scaledViewPort)) {
+            detailImage
+        } else {
+            baseImage
+        }
+
+        reusedImageMatrix.setConcat(engine.matrix, bestImage.inverseMatrix)
+        setImageBitmap(bestImage.bitmap)
+        imageMatrix = reusedImageMatrix
+    }
+
+    private fun scheduleRendering() {
+        if (!renderHandler.hasMessages(MESSAGE_RENDER)) {
+            renderHandler.sendEmptyMessage(MESSAGE_RENDER)
+        }
     }
 
     private fun renderPDf() {
@@ -156,53 +209,34 @@ open class ZoomPdfView private constructor(
             setImageDrawable(null)
             return
         }
+
         PdfRenderer(source()).openPage(0).use { page ->
-            Log.d(TAG, "width $width, height: $height")
-            val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
-            page.render(bitmap, null, detailRenderMatrix, RENDER_MODE_FOR_DISPLAY)
-            setImageBitmap(bitmap)
-            imageMatrix.reset()
+            detailImage.renderWithSize(width, height) { bitmap ->
+                page.render(bitmap, null, engine.matrix, RENDER_MODE_FOR_DISPLAY)
+            }
+            detailImage.matrix.set(engine.matrix)
+            if (detailImage.viewPort.isBiggerThan(baseImage.viewPort)) {
+                detailImage.copyTo(baseImage)
+            }
+            showRenderedImage(detailImage)
         }
     }
 
 
-    private fun renderBasePdf() {
-        var height = height
-        var width = width
-        if (height <= 0 || width <= 0) {
-            return
-        }
-
-        if(this.baseImage?.width == width && this.baseImage?.height == height) {
-            return
-        }
-
-        PdfRenderer(source()).openPage(0).use { page ->
-            val size = floatArrayOf(width.toFloat(), height.toFloat())
-            engine.matrix.mapVectors(size)
-            width = size[0].toInt()
-            height = size[1].toInt()
-            Log.d(TAG, "Rendering base width $width, height: $height")
-            val bitmap  = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
-            if(!engine.matrix.invert(inverseBaseMatrix)) {
-                error("Cant invert matrix")
-            }
-            page.render(bitmap, null, engine.matrix, RENDER_MODE_FOR_DISPLAY)
-            this.baseImage?.recycle()
-            this.baseImage = bitmap
-            setImageBitmap(bitmap)
-            imageMatrix.reset()
-        }
+    private fun showRenderedImage(renderedImage: RenderedImage) {
+        imageMatrix.reset()
+        setImageBitmap(renderedImage.bitmap)
+        shownImage = renderedImage
     }
 
     fun setFile(@RawRes resource: Int) {
         val cacheFile = File(context.cacheDir, resource.toString())
         //if (!cacheFile.isFile) {
-            context.resources.openRawResource(resource).use { input ->
-                FileOutputStream(cacheFile).use { out ->
-                    input.copyTo(out)
-                }
+        context.resources.openRawResource(resource).use { input ->
+            FileOutputStream(cacheFile).use { out ->
+                input.copyTo(out)
             }
+        }
         //}
         setFile(cacheFile)
         //source = {
@@ -230,7 +264,7 @@ open class ZoomPdfView private constructor(
                 " width: " + getWidth() + ", height:" + getHeight() +
                 " - different?" + isInSharedElementTransition()); */
         engine.setContainerSize(width.toFloat(), height.toFloat(), true)
-        renderHandler.sendEmptyMessage(MESSAGE_RENDER_BASE)
+        scheduleRendering()
     }
 
     override fun onDraw(canvas: Canvas) {
@@ -254,6 +288,10 @@ open class ZoomPdfView private constructor(
     companion object {
         private const val TAG = "PdfView"
         private const val MESSAGE_RENDER = 32193
-        private const val MESSAGE_RENDER_BASE = 32194
     }
 }
+
+private fun RectF.isBiggerThan(other: RectF): Boolean {
+    return width() > other.width() && height() > other.height()
+}
+

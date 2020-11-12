@@ -38,7 +38,6 @@ open class ZoomPdfView private constructor(
     constructor(context: Context, attrs: AttributeSet? = null, @AttrRes defStyleAttr: Int = 0)
             : this(context, attrs, defStyleAttr, ZoomEngine(context))
 
-    private var shownImage: RenderedImage? = null
     private val baseImage = RenderedImage()
     private val detailImage = RenderedImage()
 
@@ -152,7 +151,7 @@ open class ZoomPdfView private constructor(
             }
 
             override fun onUpdate(engine: ZoomEngine, matrix: Matrix) {
-                updateImageMatrix()
+                showBestImage()
                 //val page = PdfRenderer(source()).openPage(0)
                 awakenScrollBars()
             }
@@ -177,23 +176,25 @@ open class ZoomPdfView private constructor(
         scaleType = ScaleType.MATRIX
     }
 
-    private fun updateImageMatrix() {
-        if(shownImage == null) {
-            shownImage = baseImage
-        }
-
+    private fun showBestImage() {
         val scaledViewPort = RectF(0f, 0f, width.toFloat(), height.toFloat())
-        engine.matrix.invert(reusedImageMatrix)
-        reusedImageMatrix.mapRect(scaledViewPort)
-        val bestImage = if (detailImage.viewPort.contains(scaledViewPort)) {
+        val matrix = Matrix()
+        engine.matrix.invert(matrix)
+        matrix.mapRect(scaledViewPort)
+        val bestImage = if (detailImage.bitmap != null && detailImage.viewPort.contains(scaledViewPort)) {
+            Log.d(TAG,"Showing detail image")
             detailImage
         } else {
+            Log.d(TAG,"Showing base image")
             baseImage
         }
+        showRenderedImage(bestImage)
+    }
 
-        reusedImageMatrix.setConcat(engine.matrix, bestImage.inverseMatrix)
-        setImageBitmap(bestImage.bitmap)
+    private fun showRenderedImage(image: RenderedImage) {
+        reusedImageMatrix.setConcat(engine.matrix, image.inverseMatrix)
         imageMatrix = reusedImageMatrix
+        setImageBitmap(image.bitmap)
     }
 
     private fun scheduleRendering() {
@@ -210,24 +211,19 @@ open class ZoomPdfView private constructor(
             return
         }
 
+        val renderMatrix = Matrix(engine.matrix)
         PdfRenderer(source()).openPage(0).use { page ->
             detailImage.renderWithSize(width, height) { bitmap ->
-                page.render(bitmap, null, engine.matrix, RENDER_MODE_FOR_DISPLAY)
+                page.render(bitmap, null, renderMatrix, RENDER_MODE_FOR_DISPLAY)
             }
-            detailImage.matrix.set(engine.matrix)
-            if (detailImage.viewPort.isBiggerThan(baseImage.viewPort)) {
-                detailImage.copyTo(baseImage)
-            }
-            showRenderedImage(detailImage)
         }
+        detailImage.matrix = renderMatrix
+        if (detailImage.viewPort.isBiggerThan(baseImage.viewPort)) {
+            detailImage.copyTo(baseImage)
+        }
+        showRenderedImage(detailImage)
     }
 
-
-    private fun showRenderedImage(renderedImage: RenderedImage) {
-        imageMatrix.reset()
-        setImageBitmap(renderedImage.bitmap)
-        shownImage = renderedImage
-    }
 
     fun setFile(@RawRes resource: Int) {
         val cacheFile = File(context.cacheDir, resource.toString())
@@ -266,16 +262,6 @@ open class ZoomPdfView private constructor(
         engine.setContainerSize(width.toFloat(), height.toFloat(), true)
         scheduleRendering()
     }
-
-    override fun onDraw(canvas: Canvas) {
-        if (isInSharedElementTransition) {
-            // The framework will often change our matrix between onUpdate and onDraw, leaving us with
-            // a bad first frame that makes a noticeable flash. Replace the matrix values with our own.
-            imageMatrix = detailRenderMatrix
-        }
-        super.onDraw(canvas)
-    }
-
 
     override fun computeHorizontalScrollOffset(): Int = engine.computeHorizontalScrollOffset()
 
